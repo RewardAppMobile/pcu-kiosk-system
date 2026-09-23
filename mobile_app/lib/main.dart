@@ -44,6 +44,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, dynamic>? _customer;
   List<dynamic> _products = [];
   bool _isLoadingProducts = false;
+  bool _isProcessingCard = false;
   bool _isNfcActive = false;
   String _cardStatusMessage = 'Ready to scan PCU Student ID';
   bool? _isLastScanValid;
@@ -79,8 +80,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     NfcManager.instance.startSession(
       onDiscovered: (NfcTag tag) async {
-        List<String> rfidVariants = _generateRfidVariants(tag);
-        await _fetchCustomerWithVariants(rfidVariants);
+        if (_isProcessingCard) return;
+        List<String> rfidVariants = _generateRfidVariantsInBackground(tag);
+        await _verifyAndOpenDashboard(rfidVariants);
       },
       onError: (error) async {
         _initAutoNfcScanner();
@@ -88,8 +90,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Converts NFC hardware bytes using Little-Endian byte-reversal to match EM Desktop readers
-  List<String> _generateRfidVariants(NfcTag tag) {
+  /// Silently converts raw NFC Hex to Little-Endian Decimal ID (e.g. 1518290471) in memory
+  List<String> _generateRfidVariantsInBackground(NfcTag tag) {
     final Map<dynamic, dynamic> data = tag.data;
     List<int>? bytes;
 
@@ -119,24 +121,24 @@ class _HomeScreenState extends State<HomeScreen> {
     List<String> candidates = [];
 
     if (bytes != null && bytes.isNotEmpty) {
-      // 1. Primary EM Card Reader Conversion (Little-Endian: Reverse Bytes -> Hex -> Dec)
+      // 1. Convert Little-Endian (Reversed Bytes) -> Hex -> Decimal (Web Admin standard: 1518290471)
       List<int> reversedBytes = bytes.reversed.toList();
       String hexReversed = reversedBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
       try {
         BigInt decReversed = BigInt.parse(hexReversed, radix: 16);
-        candidates.add(decReversed.toString()); // Matches EM Reader: e.g., 1518290471
+        candidates.add(decReversed.toString()); // Primary ID sent to API
       } catch (_) {}
-      candidates.add(hexReversed); // e.g., 5A7F4627
+      candidates.add(hexReversed);
 
-      // 2. Secondary Native Phone Conversion (Big-Endian: Forward Bytes -> Hex -> Dec)
+      // 2. Standard Forward Bytes (Big-Endian)
       String hexForward = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
       try {
         BigInt decForward = BigInt.parse(hexForward, radix: 16);
-        candidates.add(decForward.toString()); // e.g., 658931546
+        candidates.add(decForward.toString());
       } catch (_) {}
-      candidates.add(hexForward); // e.g., 27467F5A
+      candidates.add(hexForward);
 
-      // 3. Prefixed variants for database fallback
+      // 3. Prefixed Fallbacks
       List<String> currentList = List.from(candidates);
       for (var item in currentList) {
         candidates.add('RFID-$item');
@@ -162,7 +164,14 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _fetchCustomerWithVariants(List<String> variants) async {
+  Future<void> _verifyAndOpenDashboard(List<String> variants) async {
+    if (mounted) {
+      setState(() {
+        _isProcessingCard = true;
+        _cardStatusMessage = 'Validating Card with Server...';
+      });
+    }
+
     for (String rfid in variants) {
       try {
         final response = await http.get(Uri.parse('$baseUrl/api/customer/$rfid'));
@@ -172,14 +181,20 @@ class _HomeScreenState extends State<HomeScreen> {
             setState(() {
               _customer = data;
               _isLastScanValid = true;
-              _cardStatusMessage = 'Card Verified: ${data['name']}';
+              _cardStatusMessage = 'Card Valid: ${data['name']}';
+              _selectedIndex = 0; // Automatically navigate to Dashboard View
+              _isProcessingCard = false;
             });
+
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Card Verified: Welcome ${data['name']}!'),
+                backgroundColor: Colors.green.shade800,
+                duration: const Duration(seconds: 3),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
           }
-          _showCardPrompt(
-            isValid: true,
-            title: '🎉 Welcome Back!',
-            message: 'Member: ${data['name']}\nStudent ID: ${data['student_id']}\nAvailable Balance: ${data['points']} PTS',
-          );
           return;
         }
       } catch (e) {
@@ -187,21 +202,21 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    String decId = variants.isNotEmpty ? variants.first : 'Unknown';
-    String hexId = variants.length > 1 ? variants[1] : 'Unknown';
+    String primaryConvertedDec = variants.isNotEmpty ? variants.first : 'Unknown';
 
     if (mounted) {
       setState(() {
         _customer = null;
         _isLastScanValid = false;
-        _cardStatusMessage = 'Unregistered Card ($decId)';
+        _cardStatusMessage = 'Unregistered Card ($primaryConvertedDec)';
+        _isProcessingCard = false;
       });
     }
 
     _showCardPrompt(
       isValid: false,
-      title: '❌ Unregistered Card',
-      message: 'This ID card is not in the system database.\n\nConverted Read Values:\n• EM Reader Dec ID: $decId\n• EM Reader Hex ID: $hexId\n\nSave $decId in your Web Admin panel.',
+      title: '❌ Card Not Registered',
+      message: 'NFC Read Converted to Decimal ID: $primaryConvertedDec\n\nThis card is validly parsed but not found in backend. Register $primaryConvertedDec in your Web Admin.',
     );
   }
 
@@ -315,11 +330,11 @@ class _HomeScreenState extends State<HomeScreen> {
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
             onPressed: _fetchProducts,
-            tooltip: 'Refresh Kiosk',
+            tooltip: 'Refresh System',
           ),
         ],
       ),
-      body: _selectedIndex == 0 ? _buildScanTab() : _buildMenuTab(),
+      body: _selectedIndex == 0 ? _buildDashboardTab() : _buildMenuTab(),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         selectedItemColor: const Color(0xFFD70F64),
@@ -328,17 +343,18 @@ class _HomeScreenState extends State<HomeScreen> {
         elevation: 10,
         onTap: (index) => setState(() => _selectedIndex = index),
         items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.nfc_rounded), label: 'My Pass'),
+          BottomNavigationBarItem(icon: Icon(Icons.dashboard_rounded), label: 'Student Dashboard'),
           BottomNavigationBarItem(icon: Icon(Icons.grid_view_rounded), label: 'Redeem Menu'),
         ],
       ),
     );
   }
 
-  Widget _buildScanTab() {
+  Widget _buildDashboardTab() {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // Status Bar Indicator
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
@@ -354,17 +370,23 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           child: Row(
             children: [
-              Icon(
-                _isNfcActive ? Icons.sensors_rounded : Icons.sensors_off_rounded,
-                color: const Color(0xFFD70F64),
-                size: 28,
-              ),
+              _isProcessingCard
+                  ? const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2.5, color: Color(0xFFD70F64)),
+                    )
+                  : Icon(
+                      _isNfcActive ? Icons.sensors_rounded : Icons.sensors_off_rounded,
+                      color: const Color(0xFFD70F64),
+                      size: 28,
+                    ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('NFC Auto-Detector Active', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF003366))),
+                    const Text('NFC Auto-Reader Engine', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF003366))),
                     Text(_cardStatusMessage, style: const TextStyle(fontSize: 12, color: Colors.black87)),
                   ],
                 ),
@@ -373,108 +395,152 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         const SizedBox(height: 20),
-        if (_customer != null) _buildProfileCard() else _buildEmptyState(),
+        if (_customer != null) _buildStudentDashboard() else _buildEmptyScanState(),
       ],
     );
   }
 
-  Widget _buildProfileCard() {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF003366), Color(0xFF001A33)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF003366).withOpacity(0.3),
-            blurRadius: 15,
-            offset: const Offset(0, 8),
+  /// Full Student Dashboard (Loaded immediately upon card detection)
+  Widget _buildStudentDashboard() {
+    return Column(
+      children: [
+        // Member Card
+        Container(
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF003366), Color(0xFF001A33)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF003366).withOpacity(0.3),
+                blurRadius: 15,
+                offset: const Offset(0, 8),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFC107),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Text('VERIFIED STUDENT', style: TextStyle(color: Color(0xFF003366), fontWeight: FontWeight.bold, fontSize: 10, letterSpacing: 0.8)),
+                    ),
+                    const Text('PHILIPPINE CHRISTIAN UNIV', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 28,
+                      backgroundColor: const Color(0xFFD70F64),
+                      child: Text(
+                        _customer!['name'][0],
+                        style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(_customer!['name'], style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 2),
+                          Text('Student ID: ${_customer!['student_id']}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                          Text('Converted Tag Dec: ${_customer!['rfid_number']}', style: const TextStyle(color: Color(0xFFFFC107), fontSize: 11, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFC107),
-                    borderRadius: BorderRadius.circular(20),
+                    color: Colors.white.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.white24),
                   ),
-                  child: const Text('MEMBER PASS', style: TextStyle(color: Color(0xFF003366), fontWeight: FontWeight.bold, fontSize: 10, letterSpacing: 0.8)),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('CURRENT REWARD BALANCE', style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                          Text('Active points', style: TextStyle(color: Colors.white38, fontSize: 10)),
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          const Icon(Icons.stars_rounded, color: Color(0xFFFFC107), size: 28),
+                          const SizedBox(width: 6),
+                          Text('${_customer!['points']}', style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w900)),
+                          const Text(' PTS', style: TextStyle(color: Color(0xFFFFC107), fontSize: 14, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-                const Text('PHILIPPINE CHRISTIAN UNIV', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
               ],
             ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                CircleAvatar(
-                  radius: 28,
+          ),
+        ),
+        const SizedBox(height: 16),
+        
+        // Quick Action Dashboard Controls
+        Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFD70F64),
-                  child: Text(
-                    _customer!['name'][0],
-                    style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
-                  ),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(_customer!['name'], style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 2),
-                      Text('Student ID: ${_customer!['student_id']}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                      Text('Tag ID: ${_customer!['rfid_number']}', style: const TextStyle(color: Color(0xFFFFC107), fontSize: 11, fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                ),
-              ],
+                onPressed: () => setState(() => _selectedIndex = 1),
+                icon: const Icon(Icons.shopping_bag_outlined),
+                label: const Text('Browse Rewards', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
             ),
-            const SizedBox(height: 24),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white24),
+            const SizedBox(width: 12),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF003366),
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                side: const BorderSide(color: Color(0xFF003366)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('REWARD POINTS', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-                      Text('Ready to spend', style: TextStyle(color: Colors.white38, fontSize: 10)),
-                    ],
-                  ),
-                  Row(
-                    children: [
-                      const Icon(Icons.stars_rounded, color: Color(0xFFFFC107), size: 28),
-                      const SizedBox(width: 6),
-                      Text('${_customer!['points']}', style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w900)),
-                      const Text(' PTS', style: TextStyle(color: Color(0xFFFFC107), fontSize: 14, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ],
-              ),
+              onPressed: () {
+                setState(() {
+                  _customer = null;
+                  _isLastScanValid = null;
+                  _cardStatusMessage = 'Ready to scan PCU Student ID';
+                });
+              },
+              icon: const Icon(Icons.logout_rounded),
+              label: const Text('Clear Pass', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
         ),
-      ),
+      ],
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyScanState() {
     return Container(
       padding: const EdgeInsets.all(32),
       decoration: BoxDecoration(
@@ -494,12 +560,12 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 16),
           const Text(
-            'Tap PCU Card to Begin',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF003366)),
+            'Tap PCU ID Card to Open Dashboard',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: Color(0xFF003366)),
           ),
           const SizedBox(height: 8),
           const Text(
-            'Hold your PCU Student ID card against the back of this phone to automatically fetch your member account & point balance.',
+            'Hold your PCU Card against the device. The app automatically converts Hex byte formats to Decimal (1518290471) in the background and opens the student dashboard.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.black54, fontSize: 13, height: 1.4),
           ),
@@ -539,8 +605,8 @@ class _HomeScreenState extends State<HomeScreen> {
         const SizedBox(height: 4),
         Text(
           _customer != null
-              ? 'Active Member: ${_customer!['name']} (${_customer!['points']} PTS)'
-              : 'Tap ID card on "My Pass" tab to select member',
+              ? 'Active Student: ${_customer!['name']} (${_customer!['points']} PTS)'
+              : 'Tap ID card on "Student Dashboard" tab to authenticate',
           style: TextStyle(
             fontSize: 12,
             color: _customer != null ? Colors.green.shade800 : Colors.red.shade700,
