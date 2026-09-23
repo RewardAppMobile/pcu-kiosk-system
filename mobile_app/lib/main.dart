@@ -38,7 +38,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // Update with your active PythonAnywhere domain
   static const String baseUrl = 'https://RewardAppMobile.pythonanywhere.com';
 
   int _selectedIndex = 0;
@@ -62,7 +61,6 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  // NFC Listener Init
   Future<void> _initAutoNfcScanner() async {
     bool isAvailable = await NfcManager.instance.isAvailable();
     if (!isAvailable) {
@@ -85,7 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
         await _fetchCustomerWithVariants(rfidVariants);
       },
       onError: (error) async {
-        _initAutoNfcScanner(); // Restart listener if dropped
+        _initAutoNfcScanner();
       },
     );
   }
@@ -170,7 +168,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // Iterates through Hex/Dec variants to match Web App database entries
   Future<void> _fetchCustomerWithVariants(List<String> variants) async {
     for (String rfid in variants) {
       try {
@@ -189,14 +186,13 @@ class _HomeScreenState extends State<HomeScreen> {
             title: '🎉 Welcome Back!',
             message: 'Member: ${data['name']}\nStudent ID: ${data['student_id']}\nAvailable Balance: ${data['points']} PTS',
           );
-          return; // Success, stop search loop
+          return;
         }
       } catch (e) {
         debugPrint('Checking $rfid failed: $e');
       }
     }
 
-    // Unregistered Card Flow
     String hexId = variants.isNotEmpty ? variants.first : 'Unknown';
     String decId = variants.length > 1 ? variants[1] : 'Unknown';
 
@@ -309,7 +305,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFFD70F64), // Foodpanda Pink Header
+        backgroundColor: const Color(0xFFD70F64),
         elevation: 0,
         foregroundColor: Colors.white,
         centerTitle: true,
@@ -318,7 +314,7 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             Icon(Icons.stars_rounded, color: Color(0xFFFFC107)),
             SizedBox(width: 8),
-            Text('PCU REWARDS', style: TextStyle(fontSize: 18, fontWeight: FontWeight.black, letterSpacing: 1.1)),
+            Text('PCU REWARDS', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 1.1)),
           ],
         ),
         actions: [
@@ -349,7 +345,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // Scanner Live Indicator
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
@@ -383,10 +378,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
-
         const SizedBox(height: 20),
-
-        // Loyalty Card UI
         if (_customer != null) _buildProfileCard() else _buildEmptyState(),
       ],
     );
@@ -396,7 +388,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF003366), Color(0xFF001A33)], // PCU Deep Blue Pass
+          colors: [Color(0xFF003366), Color(0xFF001A33)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -420,7 +412,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFC107), // Gold VIP Badge
+                    color: const Color(0xFFFFC107),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: const Text('MEMBER PASS', style: TextStyle(color: Color(0xFF003366), fontWeight: FontWeight.bold, fontSize: 10, letterSpacing: 0.8)),
@@ -475,7 +467,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       const Icon(Icons.stars_rounded, color: Color(0xFFFFC107), size: 28),
                       const SizedBox(width: 6),
-                      Text('${_customer!['points']}', style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.black)),
+                      Text('${_customer!['points']}', style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w900)),
                       const Text(' PTS', style: TextStyle(color: Color(0xFFFFC107), fontSize: 14, fontWeight: FontWeight.bold)),
                     ],
                   ),
