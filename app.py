@@ -9,17 +9,23 @@ app.secret_key = "kiosk_secret_key_2026"
 DB_NAME = "kiosk_system.db"
 
 # ------------------------------------------------------------------------------
-# CORS HEADERS (Required for Mobile App Communication)
+# ADVANCED CORS & PREFLIGHT HANDLING (Fixes Mobile App Network Blocking)
 # ------------------------------------------------------------------------------
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = app.make_default_options_response()
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        return response, 200
+
 @app.after_request
 def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
-    response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
     return response
-
-# Track active kiosk connections in memory
-ACTIVE_KIOSKS = {}
 
 # ------------------------------------------------------------------------------
 # DATABASE SETUP & INITIALIZATION
@@ -109,7 +115,7 @@ def init_db():
             ("viewer_admin", "admin123", "View")
         ])
 
-    # Seed Customers, Products, Rewards, Transactions if empty
+    # Seed Initial Data if empty
     cursor.execute("SELECT COUNT(*) FROM customers")
     if cursor.fetchone()[0] == 0:
         cursor.executemany('''
@@ -159,18 +165,22 @@ init_db()
 # JSON REST API ENDPOINTS FOR MOBILE APP
 # ------------------------------------------------------------------------------
 
-# GET Menu/Products List for Kiosk Display
-@app.route("/api/menu", methods=["GET"])
-@app.route("/api/products", methods=["GET"])
+# Route aliases to handle all common endpoint paths requested by mobile apps
+@app.route("/api/menu", methods=["GET", "OPTIONS"])
+@app.route("/menu", methods=["GET", "OPTIONS"])
+@app.route("/api/products", methods=["GET", "OPTIONS"])
+@app.route("/products", methods=["GET", "OPTIONS"])
 def api_get_products():
     conn = get_db()
     products = conn.execute("SELECT * FROM products").fetchall()
     conn.close()
+    
+    # Return formatted JSON list
     return jsonify([dict(product) for product in products]), 200
 
 
-# GET Customer Profile & Points by RFID or Student ID
-@app.route("/api/customer/<rfid>", methods=["GET"])
+@app.route("/api/customer/<rfid>", methods=["GET", "OPTIONS"])
+@app.route("/customer/<rfid>", methods=["GET", "OPTIONS"])
 def api_get_customer(rfid):
     conn = get_db()
     customer = conn.execute("SELECT * FROM customers WHERE rfid_number = ? OR student_id = ?", (rfid, rfid)).fetchone()
@@ -181,8 +191,7 @@ def api_get_customer(rfid):
     return jsonify({"error": "Customer not found"}), 404
 
 
-# POST Redeem Product with Points
-@app.route("/api/redeem", methods=["POST"])
+@app.route("/api/redeem", methods=["POST", "OPTIONS"])
 def api_redeem():
     data = request.get_json() or {}
     rfid_number = data.get("rfid_number")
@@ -211,9 +220,8 @@ def api_redeem():
     points_required = int(product['price'])
     if customer['points'] < points_required:
         conn.close()
-        return jsonify({"error": f"Insufficient points. Required: {points_required}, Balance: {customer['points']}"}), 400
+        return jsonify({"error": f"Insufficient points balance. Required: {points_required}"}), 400
 
-    # Calculate updates
     new_points = customer['points'] - points_required
     new_stock = product['stock'] - 1
     new_status = "Available" if new_stock > 10 else ("Low Stock" if new_stock > 0 else "Out of Stock")
@@ -233,51 +241,8 @@ def api_redeem():
         "remaining_stock": new_stock
     }), 200
 
-
-# POST Deduct Points Endpoint (Alternative direct deduction)
-@app.route("/api/deduct-points", methods=["POST"])
-def api_deduct_points():
-    data = request.get_json() or {}
-    rfid_number = data.get("rfid_number")
-    points_to_deduct = data.get("points")
-
-    if not rfid_number or points_to_deduct is None:
-        return jsonify({"error": "Missing rfid_number or points."}), 400
-
-    try:
-        points_to_deduct = int(points_to_deduct)
-    except ValueError:
-        return jsonify({"error": "Points must be a valid integer."}), 400
-
-    conn = get_db()
-    cursor = conn.cursor()
-
-    customer = cursor.execute("SELECT * FROM customers WHERE rfid_number = ?", (rfid_number,)).fetchone()
-    if not customer:
-        conn.close()
-        return jsonify({"error": "Customer not found."}), 404
-
-    if customer['points'] < points_to_deduct:
-        conn.close()
-        return jsonify({"error": "Insufficient points balance."}), 400
-
-    new_points = customer['points'] - points_to_deduct
-    now = datetime.now().strftime("%Y-%m-%d %I:%M %p")
-
-    cursor.execute("UPDATE customers SET points = ? WHERE id = ?", (new_points, customer['id']))
-    cursor.execute("INSERT INTO transactions (rfid_number, transaction_date, amount, points_earned) VALUES (?, ?, ?, ?)",
-                   (rfid_number, now, 0, -points_to_deduct))
-
-    conn.commit()
-    conn.close()
-
-    return jsonify({
-        "message": f"Deducted {points_to_deduct} points successfully.",
-        "remaining_points": new_points
-    }), 200
-
 # ------------------------------------------------------------------------------
-# WEB INTERFACE TEMPLATES & ROUTES (HTML Admin Panel)
+# WEB ADMIN INTERFACE TEMPLATES & ROUTES
 # ------------------------------------------------------------------------------
 
 HTML_BASE = """
@@ -300,10 +265,9 @@ HTML_BASE = """
         .badge-low { background: #fef9c3; color: #854d0e; padding: 3px 8px; border-radius: 4px; font-size: 12px; }
         .badge-out { background: #fee2e2; color: #991b1b; padding: 3px 8px; border-radius: 4px; font-size: 12px; }
         .btn { background: #2563eb; color: #fff; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
-        .btn-danger { background: #dc2626; }
         .form-group { margin-bottom: 15px; }
         label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="text"], input[type="number"], input[type="password"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
         .flash { padding: 10px; background: #d1e7dd; color: #0f5132; border-radius: 4px; margin-bottom: 15px; }
     </style>
 </head>
@@ -355,7 +319,7 @@ def login():
     
     login_html = HTML_BASE + """
     {% block content %}
-    2 Admin Login</h2>
+    <h2>Admin Login</h2>
     <form method="POST">
         <div class="form-group">
             <label>Username</label>
