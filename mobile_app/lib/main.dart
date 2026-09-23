@@ -16,7 +16,7 @@ class KioskApp extends StatelessWidget {
       title: 'PCU Kiosk System',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        primaryColor: const Color(0xFF003366), // PCU Navy Blue
+        primaryColor: const Color(0xFF003366),
         scaffoldBackgroundColor: const Color(0xFFF4F6F9),
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF003366),
@@ -37,9 +37,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // -------------------------------------------------------------
-  // CHANGE THIS TO YOUR ACTUAL PYTHONANYWHERE DOMAIN
-  // -------------------------------------------------------------
   static const String baseUrl = 'https://RewardAppMobile.pythonanywhere.com';
 
   int _selectedIndex = 0;
@@ -63,18 +60,21 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  // Automatically listens for NFC tags continuously
   Future<void> _initAutoNfcScanner() async {
     bool isAvailable = await NfcManager.instance.isAvailable();
     if (!isAvailable) {
-      setState(() {
-        _cardStatusMessage = 'NFC is not supported or enabled on this device.';
-        _isNfcActive = false;
-      });
+      if (mounted) {
+        setState(() {
+          _cardStatusMessage = 'NFC is not supported or enabled on this device.';
+          _isNfcActive = false;
+        });
+      }
       return;
     }
 
-    setState(() => _isNfcActive = true);
+    if (mounted) {
+      setState(() => _isNfcActive = true);
+    }
 
     NfcManager.instance.startSession(
       onDiscovered: (NfcTag tag) async {
@@ -82,33 +82,32 @@ class _HomeScreenState extends State<HomeScreen> {
         await _fetchCustomer(scannedTag);
       },
       onError: (error) async {
-        _initAutoNfcScanner(); // Restart listener if session drops
+        _initAutoNfcScanner();
       },
     );
   }
 
-  // Extract ID string from physical NFC Tag
   String _extractTagId(NfcTag tag) {
     final data = tag.data;
     if (data.containsKey('isodep')) {
       final idList = data['isodep']['identifier'] as List<dynamic>?;
       if (idList != null) {
-        return idList.map((e) => e.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
+        return idList.map((e) => (e as int).toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
       }
     } else if (data.containsKey('nfca')) {
       final idList = data['nfca']['identifier'] as List<dynamic>?;
       if (idList != null) {
-        return idList.map((e) => e.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
+        return idList.map((e) => (e as int).toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
       }
     }
-    return 'RFID-1001'; // Fallback
+    return 'RFID-1001';
   }
 
   Future<void> _fetchProducts() async {
-    setState(() => _isLoadingProducts = true);
+    if (mounted) setState(() => _isLoadingProducts = true);
     try {
       final response = await http.get(Uri.parse('$baseUrl/api/products'));
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 && mounted) {
         setState(() {
           _products = jsonDecode(response.body);
         });
@@ -116,7 +115,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       debugPrint('Error fetching products: $e');
     } finally {
-      setState(() => _isLoadingProducts = false);
+      if (mounted) setState(() => _isLoadingProducts = false);
     }
   }
 
@@ -125,22 +124,26 @@ class _HomeScreenState extends State<HomeScreen> {
       final response = await http.get(Uri.parse('$baseUrl/api/customer/$rfid'));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        setState(() {
-          _customer = data;
-          _isLastScanValid = true;
-          _cardStatusMessage = 'Valid Card Detected!';
-        });
+        if (mounted) {
+          setState(() {
+            _customer = data;
+            _isLastScanValid = true;
+            _cardStatusMessage = 'Valid Card Detected!';
+          });
+        }
         _showCardPrompt(
           isValid: true,
           title: '✅ Valid Card',
           message: 'Welcome, ${data['name']}!\nPoints Balance: ${data['points']} pts',
         );
       } else {
-        setState(() {
-          _customer = null;
-          _isLastScanValid = false;
-          _cardStatusMessage = 'Invalid Card ($rfid)';
-        });
+        if (mounted) {
+          setState(() {
+            _customer = null;
+            _isLastScanValid = false;
+            _cardStatusMessage = 'Invalid Card ($rfid)';
+          });
+        }
         _showCardPrompt(
           isValid: false,
           title: '❌ Invalid Card',
@@ -183,9 +186,11 @@ class _HomeScreenState extends State<HomeScreen> {
           title: '🎉 Redemption Successful!',
           message: '${result['message']}\nRemaining Points: ${result['remaining_points']}',
         );
-        setState(() {
-          _customer!['points'] = result['remaining_points'];
-        });
+        if (mounted) {
+          setState(() {
+            _customer!['points'] = result['remaining_points'];
+          });
+        }
         _fetchProducts();
       } else {
         _showCardPrompt(
@@ -267,7 +272,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // Auto-detect NFC status bar
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -294,38 +298,35 @@ class _HomeScreenState extends State<HomeScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text('NFC Auto-Scanner Active', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                    Text(_cardStatusMessage, style: const TextStyle(fontSize: 12, color: Colors.black80)),
+                    Text(_cardStatusMessage, style: const TextStyle(fontSize: 12, color: Colors.black87)),
                   ],
                 ),
               ),
             ],
           ),
         ),
-
         const SizedBox(height: 16),
-
-        // Display Scanned Card Info
         if (_customer != null) _buildProfileCard() else _buildEmptyState(),
-
         const SizedBox(height: 16),
-
-        // Manual Demo Buttons for Testing
         Card(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           child: Padding(
             padding: const EdgeInsets.all(12),
-            children: [
-              const Text('Quick Test Tags (Manual Tap):', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                children: [
-                  ActionChip(label: const Text('Alexondre (1001)'), onPressed: () => _fetchCustomer('RFID-1001')),
-                  ActionChip(label: const Text('Hussein (1002)'), onPressed: () => _fetchCustomer('RFID-1002')),
-                  ActionChip(label: const Text('Invalid Tag'), onPressed: () => _fetchCustomer('INVALID-9999')),
-                ],
-              ),
-            ],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Quick Test Tags (Manual Tap):', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    ActionChip(label: const Text('Alexondre (1001)'), onPressed: () => _fetchCustomer('RFID-1001')),
+                    ActionChip(label: const Text('Hussein (1002)'), onPressed: () => _fetchCustomer('RFID-1002')),
+                    ActionChip(label: const Text('Invalid Tag'), onPressed: () => _fetchCustomer('INVALID-9999')),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ],
