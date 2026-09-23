@@ -90,7 +90,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// Silently converts raw NFC Hex to Little-Endian Decimal ID (e.g. 1518290471) in memory
+  /// Converts raw NFC Hex bytes to Little-Endian Decimal ID in memory silently
   List<String> _generateRfidVariantsInBackground(NfcTag tag) {
     final Map<dynamic, dynamic> data = tag.data;
     List<int>? bytes;
@@ -121,16 +121,16 @@ class _HomeScreenState extends State<HomeScreen> {
     List<String> candidates = [];
 
     if (bytes != null && bytes.isNotEmpty) {
-      // 1. Convert Little-Endian (Reversed Bytes) -> Hex -> Decimal (Web Admin standard: 1518290471)
+      // Little-Endian byte reversal to match standard EM readers
       List<int> reversedBytes = bytes.reversed.toList();
       String hexReversed = reversedBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
       try {
         BigInt decReversed = BigInt.parse(hexReversed, radix: 16);
-        candidates.add(decReversed.toString()); // Primary ID sent to API
+        candidates.add(decReversed.toString());
       } catch (_) {}
       candidates.add(hexReversed);
 
-      // 2. Standard Forward Bytes (Big-Endian)
+      // Forward bytes fallback
       String hexForward = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
       try {
         BigInt decForward = BigInt.parse(hexForward, radix: 16);
@@ -138,7 +138,7 @@ class _HomeScreenState extends State<HomeScreen> {
       } catch (_) {}
       candidates.add(hexForward);
 
-      // 3. Prefixed Fallbacks
+      // Prefixed variants
       List<String> currentList = List.from(candidates);
       for (var item in currentList) {
         candidates.add('RFID-$item');
@@ -182,7 +182,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _customer = data;
               _isLastScanValid = true;
               _cardStatusMessage = 'Card Valid: ${data['name']}';
-              _selectedIndex = 0; // Automatically navigate to Dashboard View
+              _selectedIndex = 0; // Automatically navigate to Dashboard
               _isProcessingCard = false;
             });
 
@@ -202,13 +202,11 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    String primaryConvertedDec = variants.isNotEmpty ? variants.first : 'Unknown';
-
     if (mounted) {
       setState(() {
         _customer = null;
         _isLastScanValid = false;
-        _cardStatusMessage = 'Unregistered Card ($primaryConvertedDec)';
+        _cardStatusMessage = 'Unregistered Card';
         _isProcessingCard = false;
       });
     }
@@ -216,7 +214,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _showCardPrompt(
       isValid: false,
       title: '❌ Card Not Registered',
-      message: 'NFC Read Converted to Decimal ID: $primaryConvertedDec\n\nThis card is validly parsed but not found in backend. Register $primaryConvertedDec in your Web Admin.',
+      message: 'This ID card is not registered in the system database. Please register your card with the administrator.',
     );
   }
 
@@ -354,7 +352,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // Status Bar Indicator
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
@@ -386,7 +383,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('NFC Auto-Reader Engine', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF003366))),
+                    const Text('NFC Reader Active', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF003366))),
                     Text(_cardStatusMessage, style: const TextStyle(fontSize: 12, color: Colors.black87)),
                   ],
                 ),
@@ -400,11 +397,9 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// Full Student Dashboard (Loaded immediately upon card detection)
   Widget _buildStudentDashboard() {
     return Column(
       children: [
-        // Member Card
         Container(
           decoration: BoxDecoration(
             gradient: const LinearGradient(
@@ -459,7 +454,6 @@ class _HomeScreenState extends State<HomeScreen> {
                           Text(_customer!['name'], style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 2),
                           Text('Student ID: ${_customer!['student_id']}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                          Text('Converted Tag Dec: ${_customer!['rfid_number']}', style: const TextStyle(color: Color(0xFFFFC107), fontSize: 11, fontWeight: FontWeight.w600)),
                         ],
                       ),
                     ),
@@ -499,8 +493,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         const SizedBox(height: 16),
-        
-        // Quick Action Dashboard Controls
         Row(
           children: [
             Expanded(
@@ -565,7 +557,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'Hold your PCU Card against the device. The app automatically converts Hex byte formats to Decimal (1518290471) in the background and opens the student dashboard.',
+            'Hold your PCU Card against the back of this phone to automatically authenticate and view your student rewards dashboard.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.black54, fontSize: 13, height: 1.4),
           ),
