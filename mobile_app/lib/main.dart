@@ -90,7 +90,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// Extracts Hex bytes and performs the direct Hex-to-Decimal conversion (5A7F4627 -> 1518290471)
+  /// Extracts Hex bytes and performs direct Hex-to-Decimal conversion (5A7F4627 -> 1518290471)
   List<String> _generateRfidVariantsInBackground(NfcTag tag) {
     final Map<dynamic, dynamic> data = tag.data;
     List<int>? bytes;
@@ -121,22 +121,21 @@ class _HomeScreenState extends State<HomeScreen> {
     List<String> candidates = [];
 
     if (bytes != null && bytes.isNotEmpty) {
-      // 1. Direct Hex String from Phone Reader (e.g. [0x5A, 0x7F, 0x46, 0x27] -> "5A7F4627")
+      // 1. Direct Hex String from Phone Reader
       String hexForward = bytes
           .map((b) => b.toRadixString(16).padLeft(2, '0'))
           .join('')
           .toUpperCase();
 
-      // 2. EXACT PHOTO CONVERSION: Hex to Decimal (e.g. "5A7F4627" -> "1518290471")
+      // 2. Direct Hex to Decimal Conversion (5A7F4627 -> 1518290471)
       try {
         BigInt decForward = BigInt.parse(hexForward, radix: 16);
-        candidates.add(decForward.toString()); // Prioritize standard Decimal ID (1518290471)
+        candidates.add(decForward.toString()); // Prioritize standard Decimal ID
       } catch (_) {}
 
-      // Add Raw Hex string as 2nd candidate (5A7F4627)
       candidates.add(hexForward);
 
-      // 3. Fallback Little-Endian Reversal (for specialized card readers)
+      // 3. Fallback Little-Endian Reversal
       List<int> reversedBytes = bytes.reversed.toList();
       String hexReversed = reversedBytes
           .map((b) => b.toRadixString(16).padLeft(2, '0'))
@@ -148,7 +147,6 @@ class _HomeScreenState extends State<HomeScreen> {
       } catch (_) {}
       candidates.add(hexReversed);
 
-      // Prefixed variants fallback
       List<String> currentList = List.from(candidates);
       for (var item in currentList) {
         candidates.add('RFID-$item');
@@ -175,56 +173,59 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _verifyAndOpenDashboard(List<String> variants) async {
-    if (mounted) {
-      setState(() {
-        _isProcessingCard = true;
-        _cardStatusMessage = 'Validating Card with Server...';
-      });
-    }
+    if (!mounted) return;
+    setState(() {
+      _isProcessingCard = true;
+      _cardStatusMessage = 'Reading Card & Authenticating...';
+    });
 
-    for (String rfid in variants) {
-      try {
-        final response = await http.get(Uri.parse('$baseUrl/api/customer/$rfid'));
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          if (mounted) {
-            setState(() {
-              _customer = data;
-              _isLastScanValid = true;
-              _cardStatusMessage = 'Card Valid & Accepted: ${data['name']}';
-              _selectedIndex = 0; // Automatically navigate to Dashboard
-              _isProcessingCard = false;
-            });
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) {
+        return _CardAuthenticationDialog(
+          variants: variants,
+          baseUrl: baseUrl,
+          onSuccess: (data) {
+            Navigator.of(dialogCtx).pop();
+            if (mounted) {
+              setState(() {
+                _customer = data;
+                _isLastScanValid = true;
+                _cardStatusMessage = 'Card Valid & Accepted: ${data['name']}';
+                _selectedIndex = 0;
+                _isProcessingCard = false;
+              });
 
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('CARD VALID AND ACCEPTED: Welcome ${data['name']}!'),
-                backgroundColor: Colors.green.shade800,
-                duration: const Duration(seconds: 3),
-                behavior: SnackBarBehavior.floating,
-              ),
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('CARD VALIDATED: Welcome ${data['name']}!'),
+                  backgroundColor: const Color(0xFF003366),
+                  duration: const Duration(seconds: 3),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+          },
+          onFailure: () {
+            Navigator.of(dialogCtx).pop();
+            if (mounted) {
+              setState(() {
+                _customer = null;
+                _isLastScanValid = false;
+                _cardStatusMessage = 'Unregistered Card';
+                _isProcessingCard = false;
+              });
+            }
+
+            _showCardPrompt(
+              isValid: false,
+              title: '❌ Card Not Registered',
+              message: 'This ID card is not registered in the system database. Please register your card with the administrator.',
             );
-          }
-          return;
-        }
-      } catch (e) {
-        debugPrint('Checking $rfid failed: $e');
-      }
-    }
-
-    if (mounted) {
-      setState(() {
-        _customer = null;
-        _isLastScanValid = false;
-        _cardStatusMessage = 'Unregistered Card';
-        _isProcessingCard = false;
-      });
-    }
-
-    _showCardPrompt(
-      isValid: false,
-      title: '❌ Card Not Registered',
-      message: 'This ID card is not registered in the system database. Please register your card with the administrator.',
+          },
+        );
+      },
     );
   }
 
@@ -391,7 +392,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text('NFC Reader Active', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF003366))),
                     Text(_cardStatusMessage, style: const TextStyle(fontSize: 12, color: Colors.black87)),
@@ -429,7 +430,7 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: Column(
-              crossAxisAlignment: CrossAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -459,7 +460,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(width: 16),
                     Expanded(
                       child: Column(
-                        crossAxisAlignment: CrossAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(_customer!['name'], style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 2),
@@ -481,7 +482,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Column(
-                        crossAxisAlignment: CrossAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text('CURRENT REWARD BALANCE', style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
                           Text('Active points', style: TextStyle(color: Colors.white38, fontSize: 10)),
@@ -631,7 +632,7 @@ class _HomeScreenState extends State<HomeScreen> {
               subtitle: Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Column(
-                  crossAxisAlignment: CrossAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
@@ -665,6 +666,149 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         }),
       ],
+    );
+  }
+}
+
+class _CardAuthenticationDialog extends StatefulWidget {
+  final List<String> variants;
+  final String baseUrl;
+  final Function(Map<String, dynamic>) onSuccess;
+  final VoidCallback onFailure;
+
+  const _CardAuthenticationDialog({
+    required this.variants,
+    required this.baseUrl,
+    required this.onSuccess,
+    required this.onFailure,
+  });
+
+  @override
+  State<_CardAuthenticationDialog> createState() => _CardAuthenticationDialogState();
+}
+
+class _CardAuthenticationDialogState extends State<_CardAuthenticationDialog> {
+  String _statusText = 'Reading NFC Card Data...';
+  String? _detectedDecimalId;
+  bool _isSuccess = false;
+  bool _isError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _processAuthenticationSequence();
+  }
+
+  Future<void> _processAuthenticationSequence() async {
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+
+    if (widget.variants.isNotEmpty) {
+      setState(() {
+        _detectedDecimalId = widget.variants.first;
+        _statusText = 'Card Detected!\nValidating Student ID with Server...';
+      });
+    }
+
+    await Future.delayed(const Duration(milliseconds: 400));
+
+    for (String rfid in widget.variants) {
+      try {
+        final response = await http.get(Uri.parse('${widget.baseUrl}/api/customer/$rfid'));
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (mounted) {
+            setState(() {
+              _isSuccess = true;
+              _statusText = 'Card Verified!\nWelcome, ${data['name']}';
+            });
+            await Future.delayed(const Duration(milliseconds: 700));
+            widget.onSuccess(data);
+            return;
+          }
+        }
+      } catch (e) {
+        debugPrint('Authentication query failed for $rfid: $e');
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _isError = true;
+        _statusText = 'Unregistered Card Detected';
+      });
+      await Future.delayed(const Duration(milliseconds: 800));
+      widget.onFailure();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      contentPadding: const EdgeInsets.all(24),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: _isSuccess
+                  ? Colors.green.shade50
+                  : (_isError ? Colors.red.shade50 : const Color(0xFFFFF0F5)),
+              shape: BoxShape.circle,
+            ),
+            child: _isSuccess
+                ? Icon(Icons.check_circle_rounded, color: Colors.green.shade700, size: 54)
+                : (_isError
+                    ? Icon(Icons.error_outline_rounded, color: Colors.red.shade700, size: 54)
+                    : const SizedBox(
+                        width: 54,
+                        height: 54,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 4,
+                          color: Color(0xFFD70F64),
+                        ),
+                      )),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'CARD AUTHENTICATION',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 16,
+              color: Color(0xFF003366),
+              letterSpacing: 1.1,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _statusText,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 14, height: 1.4, color: Colors.black87, fontWeight: FontWeight.w500),
+          ),
+          if (_detectedDecimalId != null && !_isError) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: Text(
+                'Dec Key: $_detectedDecimalId',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF003366),
+                ),
+              ),
+            ),
+          ]
+        ],
+      ),
     );
   }
 }
