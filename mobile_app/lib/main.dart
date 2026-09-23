@@ -37,7 +37,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final TextEditingController _ipController = TextEditingController(text: '192.168.1.15');
+  final TextEditingController _ipController = TextEditingController(text: 'jadeobrielle123.pythonanywhere.com');
   int _selectedIndex = 0;
 
   Map<String, dynamic>? _customer;
