@@ -25,6 +25,11 @@ jobs:
           flutter-version: '3.19.x'
           channel: 'stable'
 
+      - name: Generate Native Android Configuration & V2 Embedding
+        run: |
+          cd mobile_app
+          flutter create . --org com.pcu.rewards --project-name pcu_rewards_app --platforms=android,ios
+
       - name: Install Flutter Dependencies
         run: |
           cd mobile_app
