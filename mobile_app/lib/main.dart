@@ -88,7 +88,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Reads raw NFC bytes (Hex) and converts directly to Decimal (Web Admin standard)
+  // Converts NFC hardware bytes using Little-Endian byte-reversal to match EM Desktop readers
   List<String> _generateRfidVariants(NfcTag tag) {
     final Map<dynamic, dynamic> data = tag.data;
     List<int>? bytes;
@@ -116,37 +116,34 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    Set<String> candidates = {};
+    List<String> candidates = [];
 
     if (bytes != null && bytes.isNotEmpty) {
-      // 1. Raw Hexadecimal representation
-      String hexForward = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
-
-      // 2. Primary Conversion: HEX -> DEC (Standard Web Admin Format)
-      try {
-        BigInt decForward = BigInt.parse(hexForward, radix: 16);
-        candidates.add(decForward.toString()); // Added first to query Dec ID first
-      } catch (_) {}
-
-      candidates.add(hexForward);
-
-      // 3. Reversed Bytes Conversion (Little-Endian USB Readers)
+      // 1. Primary EM Card Reader Conversion (Little-Endian: Reverse Bytes -> Hex -> Dec)
       List<int> reversedBytes = bytes.reversed.toList();
       String hexReversed = reversedBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
       try {
         BigInt decReversed = BigInt.parse(hexReversed, radix: 16);
-        candidates.add(decReversed.toString());
+        candidates.add(decReversed.toString()); // Matches EM Reader: e.g., 1518290471
       } catch (_) {}
-      candidates.add(hexReversed);
+      candidates.add(hexReversed); // e.g., 5A7F4627
 
-      // 4. Prefixed variants for legacy records
+      // 2. Secondary Native Phone Conversion (Big-Endian: Forward Bytes -> Hex -> Dec)
+      String hexForward = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
+      try {
+        BigInt decForward = BigInt.parse(hexForward, radix: 16);
+        candidates.add(decForward.toString()); // e.g., 658931546
+      } catch (_) {}
+      candidates.add(hexForward); // e.g., 27467F5A
+
+      // 3. Prefixed variants for database fallback
       List<String> currentList = List.from(candidates);
       for (var item in currentList) {
         candidates.add('RFID-$item');
       }
     }
 
-    return candidates.toList();
+    return candidates;
   }
 
   Future<void> _fetchProducts() async {
@@ -204,7 +201,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _showCardPrompt(
       isValid: false,
       title: '❌ Unregistered Card',
-      message: 'This ID card is not in the system database.\n\nConverted Read Values:\n• Dec ID: $decId\n• Hex ID: $hexId\n\nSave $decId in your Web Admin panel.',
+      message: 'This ID card is not in the system database.\n\nConverted Read Values:\n• EM Reader Dec ID: $decId\n• EM Reader Hex ID: $hexId\n\nSave $decId in your Web Admin panel.',
     );
   }
 
