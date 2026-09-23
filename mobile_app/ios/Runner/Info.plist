@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleName</key>
+	<string>PCU Rewards</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>NFCReaderUsageDescription</key>
+	<string>PCU Rewards requires NFC access to scan student ID cards.</string>
+	<key>com.apple.developer.nfc.readersession.iso14443.tag-identifiers</key>
+	<array>
+		<string>A0000002471001</string>
+	</array>
+</dict>
+</plist>
