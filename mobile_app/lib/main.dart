@@ -1,34 +1,28 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
-import 'package:nfc_manager/nfc_manager.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-
-// REPLACE WITH YOUR LIVE PYTHON BACKEND URL IF HOSTED ONLINE
-const String BACKEND_URL = "http://10.0.2.2:5000";
+import 'package:nfc_manager/nfc_manager.dart';
 
 void main() {
-  runApp(const PCURewardsApp());
+  runApp(const KioskApp());
 }
 
-class PCURewardsApp extends StatelessWidget {
-  const PCURewardsApp({super.key});
+class KioskApp extends StatelessWidget {
+  const KioskApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'PCU Rewards',
+      title: 'PCU Kiosk',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        useMaterial3: true,
+        primaryColor: const Color(0xFFD70F64),
         scaffoldBackgroundColor: const Color(0xFFF7F7F7),
-        primaryColor: const Color(0xFFE21B70), // Foodpanda Pink
-        textTheme: GoogleFonts.poppinsTextTheme(),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFFE21B70),
-          foregroundColor: Colors.white,
-          elevation: 0,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFFD70F64),
+          primary: const Color(0xFFD70F64),
         ),
+        useMaterial3: true,
       ),
       home: const HomeScreen(),
     );
@@ -43,9 +37,15 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  Map<String, dynamic>? _userAccount;
+  final TextEditingController _ipController = TextEditingController(text: '192.168.1.15');
+  int _selectedIndex = 0;
+
+  Map<String, dynamic>? _customer;
   List<dynamic> _products = [];
-  bool _isLoading = false;
+  bool _isLoadingProducts = false;
+  bool _isScanningNfc = false;
+
+  String get baseUrl => 'http://${_ipController.text.trim()}:5000';
 
   @override
   void initState() {
@@ -54,198 +54,334 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _fetchProducts() async {
-    setState(() => _isLoading = true);
+    setState(() => _isLoadingProducts = true);
     try {
-      final response = await http.get(Uri.parse('$BACKEND_URL/api/products'));
+      final response = await http.get(Uri.parse('$baseUrl/api/products'));
       if (response.statusCode == 200) {
         setState(() {
           _products = jsonDecode(response.body);
         });
       }
     } catch (e) {
-      debugPrint('Error: $e');
+      debugPrint('Error fetching products: $e');
     } finally {
-      setState(() => _isLoading = false);
+      setState(() => _isLoadingProducts = false);
     }
   }
 
-  void _startNFCScan() async {
+  Future<void> _fetchCustomer(String rfid) async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/api/customer/$rfid'));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() => _customer = data);
+        _showMessage('ID Verified 🐼', 'Welcome back, ${data['name']}!');
+      } else {
+        _showMessage('Card Not Found', 'No student registered for tag: $rfid');
+      }
+    } catch (e) {
+      _showMessage('Connection Error', 'Cannot reach Flask server at $baseUrl');
+    }
+  }
+
+  Future<void> _startNfcScan() async {
     bool isAvailable = await NfcManager.instance.isAvailable();
     if (!isAvailable) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('NFC is disabled or not supported on this device.')),
-      );
+      _showMessage('NFC Unavailable', 'NFC hardware is not supported or disabled on this device.');
       return;
     }
 
-    showModalBottomSheet(
-      context: context,
-      isDismissible: false,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(24),
-        height: 260,
-        child: Column(
-          children: [
-            const Icon(Icons.nfc_rounded, size: 64, color: Color(0xFFE21B70)),
-            const SizedBox(height: 12),
-            Text('Hold Card Near Phone', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 6),
-            const Text('Touch your PCU ID or RFID card to the back of the phone.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
-            const Spacer(),
-            ElevatedButton(
-              onPressed: () {
-                NfcManager.instance.stopSession();
-                Navigator.pop(context);
-              },
-              child: const Text('Cancel'),
-            )
-          ],
-        ),
-      ),
-    );
-
-    NfcManager.instance.startSession(
-      onDiscovered: (NfcTag tag) async {
-        String rfidTag = _parseTagId(tag);
-        NfcManager.instance.stopSession();
-        if (Navigator.canPop(context)) Navigator.pop(context);
-        _verifyWithBackend(rfidTag);
-      },
-    );
+    setState(() => _isScanningNfc = true);
+    NfcManager.instance.startSession(onDiscovered: (NfcTag tag) async {
+      final ndef = tag.data;
+      String scannedTag = 'RFID-1001';
+      if (ndef.containsKey('isodep')) {
+        scannedTag = ndef['isodep']['identifier']?.toString() ?? 'RFID-1001';
+      }
+      await _fetchCustomer(scannedTag);
+      NfcManager.instance.stopSession();
+      setState(() => _isScanningNfc = false);
+    });
   }
 
-  String _parseTagId(NfcTag tag) {
-    List<int>? idBytes;
-    final data = tag.data;
-    if (data.containsKey('isodep')) idBytes = List<int>.from(data['isodep']['identifier']);
-    else if (data.containsKey('nfca')) idBytes = List<int>.from(data['nfca']['identifier']);
-    else if (data.containsKey('mifare')) idBytes = List<int>.from(data['mifare']['identifier']);
-
-    if (idBytes != null) {
-      return "RFID-" + idBytes.map((e) => e.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
+  Future<void> _redeemProduct(Map<String, dynamic> product) async {
+    if (_customer == null) {
+      _showMessage('Scan Card First', 'Please scan your Student ID before placing an order.');
+      return;
     }
-    return "RFID-1001";
-  }
 
-  Future<void> _verifyWithBackend(String rfid) async {
     try {
       final response = await http.post(
-        Uri.parse('$BACKEND_URL/api/mobile-login'),
+        Uri.parse('$baseUrl/api/redeem'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'rfid_number': rfid}),
+        body: jsonEncode({
+          'rfid_number': _customer!['rfid_number'],
+          'product_id': product['id'],
+        }),
       );
-      final data = jsonDecode(response.body);
 
-      if (response.statusCode == 200 && data['success'] == true) {
-        setState(() => _userAccount = data['customer']);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Authenticated: ${data['customer']['name']}'), backgroundColor: const Color(0xFFE21B70)),
-        );
+      final result = jsonDecode(response.body);
+      if (response.statusCode == 200) {
+        _showMessage('Success! 🎉', result['message']);
+        setState(() {
+          _customer!['points'] = result['remaining_points'];
+        });
+        _fetchProducts();
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(data['error'] ?? 'Card not found.')),
-        );
+        _showMessage('Order Failed', result['error'] ?? 'Transaction failed.');
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Server connection failed.')),
-      );
+      _showMessage('Error', 'Failed to communicate with Flask server.');
     }
+  }
+
+  void _showMessage(String title, String message) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK', style: TextStyle(color: Color(0xFFD70F64))),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('PCU Pride Rewards')),
-      body: SingleChildScrollView(
-        child: Column(
+      appBar: AppBar(
+        backgroundColor: const Color(0xFFD70F64),
+        foregroundColor: Colors.white,
+        title: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: const BoxDecoration(
-                color: Color(0xFFE21B70),
-                borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
-              ),
-              child: Column(
-                children: [
-                  if (_userAccount != null) ...[
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
-                      child: Row(
-                        children: [
-                          const CircleAvatar(backgroundColor: Color(0xFFE21B70), child: Icon(Icons.person, color: Colors.white)),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(_userAccount!['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                                Text('ID: ${_userAccount!['student_id']}', style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                              ],
-                            ),
-                          ),
-                          Text('${_userAccount!['points']} pts', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFE21B70))),
-                        ],
+            Text('PCU CAMPUS KIOSK', style: TextStyle(fontSize: 10, letterSpacing: 1)),
+            Text('foodpanda 🐼', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _fetchProducts,
+            tooltip: 'Refresh Menu',
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Container(
+            color: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                const Text('Flask Server IP: ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                Expanded(
+                  child: SizedBox(
+                    height: 35,
+                    child: TextField(
+                      controller: _ipController,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                        fillColor: Colors.grey[200],
+                        filled: true,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide.none),
                       ),
                     ),
-                    const SizedBox(height: 12),
-                  ],
-                  SizedBox(
-                    width: double.infinity,
-                    height: 50,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: const Color(0xFFE21B70)),
-                      onPressed: _startNFCScan,
-                      icon: const Icon(Icons.nfc),
-                      label: Text(_userAccount == null ? 'SCAN CARD / ID' : 'TAP ANOTHER CARD', style: const TextStyle(fontWeight: FontWeight.bold)),
-                    ),
                   ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _selectedIndex == 0 ? _buildScanTab() : _buildMenuTab(),
+          ),
+        ],
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        selectedItemColor: const Color(0xFFD70F64),
+        onTap: (index) => setState(() => _selectedIndex = index),
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.credit_card), label: 'Scan ID'),
+          BottomNavigationBarItem(icon: Icon(Icons.fastfood), label: 'Menu & Redeem'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScanTab() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFFD70F64),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Scan Student ID', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              const Text('Hold your physical PCU Student ID near the back of your Android or iPhone device.', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: const Color(0xFFD70F64),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: _isScanningNfc ? null : _startNfcScan,
+                  icon: _isScanningNfc
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Color(0xFFD70F64), strokeWidth: 2))
+                      : const Icon(Icons.nfc),
+                  label: Text(_isScanningNfc ? 'Scanning...' : 'Scan CARD / ID', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Divider(color: Colors.white30),
+              const Text('Or test manually with registered tags:', style: TextStyle(color: Colors.white70, fontSize: 11)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: [
+                  _demoChip('Alexondre (1001)', 'RFID-1001'),
+                  _demoChip('Hussein (1002)', 'RFID-1002'),
+                  _demoChip('Calvin (1003)', 'RFID-1003'),
                 ],
               ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        if (_customer != null) _buildProfileCard() else _buildEmptyState(),
+      ],
+    );
+  }
+
+  Widget _demoChip(String label, String rfid) {
+    return ActionChip(
+      backgroundColor: Colors.white24,
+      label: Text(label, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+      onPressed: () => _fetchCustomer(rfid),
+    );
+  }
+
+  Widget _buildProfileCard() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: const Color(0xFFD70F64),
+                  child: Text(_customer!['name'][0], style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_customer!['name'], style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      Text('Student ID: ${_customer!['student_id']}', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                      Text('RFID Tag: ${_customer!['rfid_number']}', style: const TextStyle(color: Color(0xFFD70F64), fontWeight: FontWeight.bold, fontSize: 12)),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF0F5),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFFFD6E5)),
+              ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Kiosk Menu', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold)),
-                  IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchProducts),
+                  const Text('Available Points Balance', style: TextStyle(color: Color(0xFFD70F64), fontWeight: FontWeight.w600)),
+                  Text('${_customer!['points']} pts', style: const TextStyle(color: Color(0xFFD70F64), fontSize: 20, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),
-            _isLoading
-                ? const CircularProgressIndicator(color: Color(0xFFE21B70))
-                : GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(16),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 0.85, crossAxisSpacing: 10, mainAxisSpacing: 10),
-                    itemCount: _products.length,
-                    itemBuilder: (context, index) {
-                      final item = _products[index];
-                      return Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(Icons.fastfood, size: 40, color: Color(0xFFE21B70)),
-                            const Spacer(),
-                            Text(item['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                            Text('${item['price']} Points', style: const TextStyle(color: Color(0xFFE21B70))),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: const Padding(
+        padding: EdgeInsets.all(24),
+        child: Column(
+          children: [
+            Icon(Icons.phone_android, size: 40, color: Colors.grey),
+            SizedBox(height: 8),
+            Text(
+              'No active card scanned yet. Tap "Scan CARD / ID" or select a demo tag above.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMenuTab() {
+    if (_isLoadingProducts) {
+      return const Center(child: CircularProgressIndicator(color: Color(0xFFD70F64)));
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: _products.length,
+      itemBuilder: (context, index) {
+        final item = _products[index];
+        final bool inStock = item['stock'] > 0;
+        return Card(
+          margin: const EdgeInsets.only(bottom: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            title: Text(item['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${item['price']} Points / ₱${(item['price'] as num).toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFD70F64), fontWeight: FontWeight.bold)),
+                Text(inStock ? 'Stock: ${item['stock']} left' : 'Out of Stock', style: TextStyle(fontSize: 11, color: inStock ? Colors.green : Colors.red)),
+              ],
+            ),
+            trailing: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: inStock ? const Color(0xFFD70F64) : Colors.grey,
+                foregroundColor: Colors.white,
+                shape: const StadiumBorder(),
+              ),
+              onPressed: inStock ? () => _redeemProduct(item) : null,
+              child: const Text('Redeem'),
+            ),
+          ),
+        );
+      },
     );
   }
 }
