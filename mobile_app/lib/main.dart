@@ -78,8 +78,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     NfcManager.instance.startSession(
       onDiscovered: (NfcTag tag) async {
-        String scannedTag = _extractTagId(tag);
-        await _fetchCustomer(scannedTag);
+        Map<String, String> tagIds = _extractTagFormats(tag);
+        await _fetchCustomer(tagIds['hex']!, secondaryRfid: tagIds['dec']);
       },
       onError: (error) async {
         _initAutoNfcScanner();
@@ -87,20 +87,41 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  String _extractTagId(NfcTag tag) {
-    final data = tag.data;
-    if (data.containsKey('isodep')) {
-      final idList = data['isodep']['identifier'] as List<dynamic>?;
-      if (idList != null) {
-        return idList.map((e) => (e as int).toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
-      }
-    } else if (data.containsKey('nfca')) {
-      final idList = data['nfca']['identifier'] as List<dynamic>?;
-      if (idList != null) {
-        return idList.map((e) => (e as int).toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
+  // Universal NFC Tag Extractor (Supports Hex and Decimal formats)
+  Map<String, String> _extractTagFormats(NfcTag tag) {
+    final Map<dynamic, dynamic> data = tag.data;
+    List<int>? bytes;
+
+    for (final key in [
+      'isodep',
+      'nfca',
+      'nfcb',
+      'nfcf',
+      'nfcv',
+      'mifareclassic',
+      'mifareultralight',
+      'mifare',
+      'ndef'
+    ]) {
+      if (data.containsKey(key) && data[key] is Map) {
+        final techMap = data[key] as Map;
+        if (techMap.containsKey('identifier') && techMap['identifier'] != null) {
+          bytes = List<int>.from(techMap['identifier']);
+          break;
+        } else if (techMap.containsKey('id') && techMap['id'] != null) {
+          bytes = List<int>.from(techMap['id']);
+          break;
+        }
       }
     }
-    return 'RFID-1001';
+
+    if (bytes != null && bytes.isNotEmpty) {
+      String hex = bytes.map((e) => e.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
+      String dec = BigInt.parse(hex, radix: 16).toString();
+      return {'hex': hex, 'dec': dec};
+    }
+
+    return {'hex': 'RFID-1001', 'dec': '1001'};
   }
 
   Future<void> _fetchProducts() async {
@@ -119,42 +140,49 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _fetchCustomer(String rfid) async {
+  Future<void> _fetchCustomer(String hexRfid, {String? secondaryRfid}) async {
     try {
-      final response = await http.get(Uri.parse('$baseUrl/api/customer/$rfid'));
+      // 1. Try querying with primary Hex RFID
+      var response = await http.get(Uri.parse('$baseUrl/api/customer/$hexRfid'));
+
+      // 2. Fallback: If 404, try querying with Decimal format
+      if (response.statusCode != 200 && secondaryRfid != null && secondaryRfid.isNotEmpty) {
+        response = await http.get(Uri.parse('$baseUrl/api/customer/$secondaryRfid'));
+      }
+
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (mounted) {
           setState(() {
             _customer = data;
             _isLastScanValid = true;
-            _cardStatusMessage = 'Valid Card Detected!';
+            _cardStatusMessage = 'Valid Card: ${data['name']}';
           });
         }
         _showCardPrompt(
           isValid: true,
-          title: '✅ Valid Card',
-          message: 'Welcome, ${data['name']}!\nPoints Balance: ${data['points']} pts',
+          title: '✅ Valid Card Detected',
+          message: 'Student: ${data['name']}\nID: ${data['student_id']}\nPoints Balance: ${data['points']} PTS',
         );
       } else {
         if (mounted) {
           setState(() {
             _customer = null;
             _isLastScanValid = false;
-            _cardStatusMessage = 'Invalid Card ($rfid)';
+            _cardStatusMessage = 'Invalid Card ($hexRfid)';
           });
         }
         _showCardPrompt(
           isValid: false,
-          title: '❌ Invalid Card',
-          message: 'Card ID ($rfid) is not registered in the kiosk database.',
+          title: '❌ Unregistered Card',
+          message: 'This NFC Card is not in the Web App database.\n\nDetected Tag IDs:\n• Hex ID: $hexRfid\n${secondaryRfid != null ? '• Dec ID: $secondaryRfid\n' : ''}\nRegister either ID in your Web App admin panel.',
         );
       }
     } catch (e) {
       _showCardPrompt(
         isValid: false,
         title: 'Connection Error',
-        message: 'Unable to reach backend server.',
+        message: 'Unable to reach backend server at PythonAnywhere.',
       );
     }
   }
@@ -184,7 +212,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _showCardPrompt(
           isValid: true,
           title: '🎉 Redemption Successful!',
-          message: '${result['message']}\nRemaining Points: ${result['remaining_points']}',
+          message: '${result['message']}\nRemaining Points: ${result['remaining_points']} PTS',
         );
         if (mounted) {
           setState(() {
@@ -220,10 +248,12 @@ class _HomeScreenState extends State<HomeScreen> {
               color: isValid ? Colors.green : Colors.red,
             ),
             const SizedBox(width: 8),
-            Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            Expanded(
+              child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            ),
           ],
         ),
-        content: Text(message, style: const TextStyle(fontSize: 15)),
+        content: Text(message, style: const TextStyle(fontSize: 14)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
@@ -297,7 +327,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('NFC Auto-Scanner Active', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                    const Text('NFC Reader Ready', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                     Text(_cardStatusMessage, style: const TextStyle(fontSize: 12, color: Colors.black87)),
                   ],
                 ),
@@ -398,7 +428,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             SizedBox(height: 4),
             Text(
-              'Hold your PCU Student ID card against the back of this phone to automatically display points and rewards.',
+              'Tap your physical PCU Student ID card against the phone to display student info and points.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
