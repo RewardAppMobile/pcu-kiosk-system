@@ -28,7 +28,7 @@ def add_cors_headers(response):
     return response
 
 # ------------------------------------------------------------------------------
-# DATABASE SETUP & INITIALIZATION
+# DATABASE SETUP & AUTO-MIGRATION
 # ------------------------------------------------------------------------------
 def get_db():
     conn = sqlite3.connect(DB_NAME)
@@ -56,6 +56,7 @@ def init_db():
             price REAL NOT NULL,
             stock INTEGER NOT NULL,
             status TEXT NOT NULL,
+            category TEXT DEFAULT 'Food',
             last_updated TEXT NOT NULL
         )
     ''')
@@ -73,6 +74,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             rfid_number TEXT NOT NULL,
+            item_name TEXT DEFAULT 'Kiosk Item',
             transaction_date TEXT NOT NULL,
             amount REAL NOT NULL,
             points_earned INTEGER NOT NULL
@@ -96,6 +98,17 @@ def init_db():
             created_at TEXT NOT NULL
         )
     ''')
+
+    # Safe Schema Migrations for existing databases
+    try:
+        cursor.execute("ALTER TABLE products ADD COLUMN category TEXT DEFAULT 'Food'")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    try:
+        cursor.execute("ALTER TABLE transactions ADD COLUMN item_name TEXT DEFAULT 'Kiosk Item'")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
 
     # Seed Store Settings if empty
     cursor.execute("SELECT COUNT(*) FROM store_settings")
@@ -122,38 +135,38 @@ def init_db():
             INSERT INTO customers (name, student_id, rfid_number, points)
             VALUES (?, ?, ?, ?)
         ''', [
-            ("Alexondre Violado", "2024-0001", "RFID-1001", 120),
-            ("Hussein Buarki", "2024-0002", "RFID-1002", 45),
-            ("Calvin Castro", "2024-0003", "RFID-1003", 210)
+            ("Alexondre Violado", "2024-0001", "RFID-1001", 350),
+            ("Hussein Buarki", "2024-0002", "RFID-1002", 120),
+            ("Calvin Castro", "2024-0003", "RFID-1003", 500)
         ])
 
         cursor.executemany('''
-            INSERT INTO products (name, price, stock, status, last_updated)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO products (name, price, stock, status, category, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?)
         ''', [
-            ("Bottled Water", 15.00, 50, "Available", "2026-03-08 08:00 AM"),
-            ("Fruit Juice", 30.00, 4, "Low Stock", "2026-03-08 09:30 AM"),
-            ("Club Sandwich", 60.00, 15, "Available", "2026-03-08 10:15 AM"),
-            ("Chocolate Cookie", 25.00, 0, "Out of Stock", "2026-03-08 11:00 AM")
+            ("Bottled Water", 15.00, 50, "Available", "Drinks", "2026-03-08 08:00 AM"),
+            ("Fruit Juice", 30.00, 4, "Low Stock", "Drinks", "2026-03-08 09:30 AM"),
+            ("Club Sandwich", 60.00, 15, "Available", "Food", "2026-03-08 10:15 AM"),
+            ("Chocolate Cookie", 25.00, 0, "Out of Stock", "Snacks", "2026-03-08 11:00 AM")
         ])
 
         cursor.executemany('''
             INSERT INTO rewards (name, points_required, availability)
             VALUES (?, ?, ?)
         ''', [
-            ("Free Drink", 50, "Available"),
-            ("₱20 Discount", 100, "Available"),
-            ("Free Snack", 150, "Available")
+            ("Free Milk Tea", 80, "Available"),
+            ("₱50 Meal Voucher", 150, "Available"),
+            ("PCU Pride Merchandise", 300, "Available")
         ])
 
         cursor.executemany('''
-            INSERT INTO transactions (rfid_number, transaction_date, amount, points_earned)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO transactions (rfid_number, item_name, transaction_date, amount, points_earned)
+            VALUES (?, ?, ?, ?, ?)
         ''', [
-            ("RFID-1001", "2026-03-01 10:30", 500.00, 50),
-            ("RFID-1001", "2026-03-05 14:15", 700.00, 70),
-            ("RFID-1002", "2026-03-06 11:00", 450.00, 45),
-            ("RFID-1003", "2026-03-07 16:45", 2100.00, 210)
+            ("RFID-1001", "Bottled Water", "2026-03-01 10:30", 15.00, -15),
+            ("RFID-1001", "Club Sandwich", "2026-03-05 14:15", 60.00, -60),
+            ("RFID-1002", "Fruit Juice", "2026-03-06 11:00", 30.00, -30),
+            ("RFID-1003", "Club Sandwich", "2026-03-07 16:45", 60.00, -60)
         ])
 
     conn.commit()
@@ -162,21 +175,65 @@ def init_db():
 init_db()
 
 # ------------------------------------------------------------------------------
-# JSON REST API ENDPOINTS FOR MOBILE APP
+# JSON REST API ENDPOINTS FOR MOBILE APP (SYNCED WITH WEB DATA)
 # ------------------------------------------------------------------------------
 
-# Route aliases to handle all common endpoint paths requested by mobile apps
+@app.route("/api/health", methods=["GET", "OPTIONS"])
+def api_health():
+    """Connectivity test for mobile app load screen."""
+    return jsonify({"status": "online", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}), 200
+
+
+@app.route("/api/scan-id", methods=["POST", "OPTIONS"])
+def api_scan_id():
+    """Processes physical NFC card scans from mobile device."""
+    data = request.get_json() or {}
+    rfid_number = data.get("rfid_number", "").strip()
+
+    if not rfid_number:
+        return jsonify({"success": False, "error": "No RFID card identifier received."}), 400
+
+    conn = get_db()
+    customer = conn.execute("SELECT * FROM customers WHERE rfid_number = ? OR student_id = ?", (rfid_number, rfid_number)).fetchone()
+
+    if customer:
+        txs = conn.execute("SELECT * FROM transactions WHERE rfid_number = ? ORDER BY id DESC LIMIT 10", (customer["rfid_number"],)).fetchall()
+        conn.close()
+        return jsonify({
+            "success": True,
+            "registered": True,
+            "customer": dict(customer),
+            "transactions": [dict(t) for t in txs]
+        }), 200
+    else:
+        conn.close()
+        return jsonify({
+            "success": True,
+            "registered": False,
+            "rfid_number": rfid_number,
+            "message": "Card not registered in database."
+        }), 200
+
+
 @app.route("/api/menu", methods=["GET", "OPTIONS"])
 @app.route("/menu", methods=["GET", "OPTIONS"])
 @app.route("/api/products", methods=["GET", "OPTIONS"])
 @app.route("/products", methods=["GET", "OPTIONS"])
 def api_get_products():
+    """Returns product catalog to mobile app."""
     conn = get_db()
     products = conn.execute("SELECT * FROM products").fetchall()
     conn.close()
-    
-    # Return formatted JSON list
     return jsonify([dict(product) for product in products]), 200
+
+
+@app.route("/api/rewards", methods=["GET", "OPTIONS"])
+def api_get_rewards():
+    """Returns reward options to mobile app."""
+    conn = get_db()
+    rewards = conn.execute("SELECT * FROM rewards").fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rewards]), 200
 
 
 @app.route("/api/customer/<rfid>", methods=["GET", "OPTIONS"])
@@ -185,14 +242,15 @@ def api_get_customer(rfid):
     conn = get_db()
     customer = conn.execute("SELECT * FROM customers WHERE rfid_number = ? OR student_id = ?", (rfid, rfid)).fetchone()
     conn.close()
-    
     if customer:
         return jsonify(dict(customer)), 200
     return jsonify({"error": "Customer not found"}), 404
 
 
+@app.route("/api/purchase", methods=["POST", "OPTIONS"])
 @app.route("/api/redeem", methods=["POST", "OPTIONS"])
-def api_redeem():
+def api_purchase():
+    """Handles product purchase/points redemption from mobile app."""
     data = request.get_json() or {}
     rfid_number = data.get("rfid_number")
     product_id = data.get("product_id")
@@ -224,19 +282,21 @@ def api_redeem():
 
     new_points = customer['points'] - points_required
     new_stock = product['stock'] - 1
-    new_status = "Available" if new_stock > 10 else ("Low Stock" if new_stock > 0 else "Out of Stock")
+    new_status = "Available" if new_stock > 5 else ("Low Stock" if new_stock > 0 else "Out of Stock")
     now = datetime.now().strftime("%Y-%m-%d %I:%M %p")
 
     cursor.execute("UPDATE customers SET points = ? WHERE id = ?", (new_points, customer['id']))
     cursor.execute("UPDATE products SET stock = ?, status = ?, last_updated = ? WHERE id = ?", (new_stock, new_status, now, product['id']))
-    cursor.execute("INSERT INTO transactions (rfid_number, transaction_date, amount, points_earned) VALUES (?, ?, ?, ?)",
-                   (rfid_number, now, 0, -points_required))
+    cursor.execute("INSERT INTO transactions (rfid_number, item_name, transaction_date, amount, points_earned) VALUES (?, ?, ?, ?, ?)",
+                   (rfid_number, product['name'], now, product['price'], -points_required))
 
     conn.commit()
     conn.close()
 
     return jsonify({
-        "message": f"Successfully redeemed {product['name']}!",
+        "success": True,
+        "message": f"Successfully purchased {product['name']}!",
+        "new_balance": new_points,
         "remaining_points": new_points,
         "remaining_stock": new_stock
     }), 200
@@ -255,8 +315,8 @@ HTML_BASE = """
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f6f9; margin: 0; padding: 20px; color: #333; }
         .container { max-width: 1000px; margin: 0 auto; background: #fff; padding: 20px 30px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-        nav { background: #1e293b; padding: 12px 20px; border-radius: 6px; margin-bottom: 20px; display: flex; gap: 15px; }
-        nav a { color: #f8fafc; text-decoration: none; font-weight: bold; }
+        nav { background: #D70F64; padding: 12px 20px; border-radius: 6px; margin-bottom: 20px; display: flex; gap: 15px; }
+        nav a { color: #ffffff; text-decoration: none; font-weight: bold; }
         nav a:hover { text-decoration: underline; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; }
@@ -264,11 +324,11 @@ HTML_BASE = """
         .badge-available { background: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 4px; font-size: 12px; }
         .badge-low { background: #fef9c3; color: #854d0e; padding: 3px 8px; border-radius: 4px; font-size: 12px; }
         .badge-out { background: #fee2e2; color: #991b1b; padding: 3px 8px; border-radius: 4px; font-size: 12px; }
-        .btn { background: #2563eb; color: #fff; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
+        .btn { background: #D70F64; color: #fff; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; font-weight: bold; }
         .form-group { margin-bottom: 15px; }
         label { display: block; margin-bottom: 5px; font-weight: bold; }
         input[type="text"], input[type="password"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        .flash { padding: 10px; background: #d1e7dd; color: #0f5132; border-radius: 4px; margin-bottom: 15px; }
+        .flash { padding: 10px; background: #fce7f3; color: #9d174d; border-radius: 4px; margin-bottom: 15px; }
     </style>
 </head>
 <body>
@@ -279,7 +339,7 @@ HTML_BASE = """
             <a href="{{ url_for('inventory') }}">Inventory</a>
             <a href="{{ url_for('customers') }}">Customers</a>
             <a href="{{ url_for('transactions') }}">Transactions</a>
-            <a href="{{ url_for('logout') }}" style="margin-left: auto; color: #fca5a5;">Logout ({{ session['user'] }})</a>
+            <a href="{{ url_for('logout') }}" style="margin-left: auto; color: #ffccd5;">Logout ({{ session['user'] }})</a>
         </nav>
         {% endif %}
 
@@ -319,7 +379,7 @@ def login():
     
     login_html = HTML_BASE + """
     {% block content %}
-    <h2>Admin Login</h2>
+    <h2>PCU Kiosk Admin Login 🐼</h2>
     <form method="POST">
         <div class="form-group">
             <label>Username</label>
@@ -355,17 +415,17 @@ def dashboard():
     {% block content %}
     <h2>Dashboard Overview</h2>
     <div style="display: flex; gap: 20px; margin-top: 20px;">
-        <div style="flex: 1; background: #eff6ff; padding: 20px; border-radius: 6px; text-align: center;">
-            <h3>Total Products</h3>
-            <p style="font-size: 28px; font-weight: bold; margin: 0;">{{ total_products }}</p>
+        <div style="flex: 1; background: #fce7f3; padding: 20px; border-radius: 6px; text-align: center;">
+            <h3 style="color: #9d174d;">Total Products</h3>
+            <p style="font-size: 28px; font-weight: bold; margin: 0; color: #9d174d;">{{ total_products }}</p>
         </div>
         <div style="flex: 1; background: #f0fdf4; padding: 20px; border-radius: 6px; text-align: center;">
-            <h3>Registered Customers</h3>
-            <p style="font-size: 28px; font-weight: bold; margin: 0;">{{ total_customers }}</p>
+            <h3 style="color: #166534;">Registered Customers</h3>
+            <p style="font-size: 28px; font-weight: bold; margin: 0; color: #166534;">{{ total_customers }}</p>
         </div>
         <div style="flex: 1; background: #fefce8; padding: 20px; border-radius: 6px; text-align: center;">
-            <h3>Transactions Logged</h3>
-            <p style="font-size: 28px; font-weight: bold; margin: 0;">{{ total_transactions }}</p>
+            <h3 style="color: #854d0e;">Transactions Logged</h3>
+            <p style="font-size: 28px; font-weight: bold; margin: 0; color: #854d0e;">{{ total_transactions }}</p>
         </div>
     </div>
     {% endblock %}
@@ -388,6 +448,7 @@ def inventory():
             <tr>
                 <th>ID</th>
                 <th>Name</th>
+                <th>Category</th>
                 <th>Price</th>
                 <th>Stock</th>
                 <th>Status</th>
@@ -399,6 +460,7 @@ def inventory():
             <tr>
                 <td>{{ p.id }}</td>
                 <td>{{ p.name }}</td>
+                <td>{{ p.category or 'Food' }}</td>
                 <td>₱{{ "%.2f"|format(p.price) }}</td>
                 <td>{{ p.stock }}</td>
                 <td>
@@ -468,6 +530,7 @@ def transactions():
             <tr>
                 <th>ID</th>
                 <th>RFID Tag</th>
+                <th>Item Ordered</th>
                 <th>Date & Time</th>
                 <th>Amount</th>
                 <th>Points Changed</th>
@@ -478,6 +541,7 @@ def transactions():
             <tr>
                 <td>{{ t.id }}</td>
                 <td><code>{{ t.rfid_number }}</code></td>
+                <td>{{ t.item_name or 'Kiosk Purchase' }}</td>
                 <td>{{ t.transaction_date }}</td>
                 <td>₱{{ "%.2f"|format(t.amount) }}</td>
                 <td style="color: {% if t.points_earned < 0 %}#dc2626{% else %}#16a34a{% endif %}; font-weight: bold;">
