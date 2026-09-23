@@ -17,7 +17,7 @@ class KioskApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primaryColor: const Color(0xFFD70F64), // Foodpanda Pink
-        scaffoldBackgroundColor: const Color(0xFFF8F9FA),
+        scaffoldBackgroundColor: const Color(0xFFF4F6F9),
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFFD70F64),
           primary: const Color(0xFFD70F64),
@@ -88,7 +88,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Generates Hex, Dec, and Reverse Endian variations for 100% backward compatibility
+  // Reads raw NFC bytes (Hex) and converts directly to Decimal (Web Admin standard)
   List<String> _generateRfidVariants(NfcTag tag) {
     final Map<dynamic, dynamic> data = tag.data;
     List<int>? bytes;
@@ -119,34 +119,31 @@ class _HomeScreenState extends State<HomeScreen> {
     Set<String> candidates = {};
 
     if (bytes != null && bytes.isNotEmpty) {
-      // 1. Direct Hex
+      // 1. Raw Hexadecimal representation
       String hexForward = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
-      candidates.add(hexForward);
 
-      // 2. Direct Decimal
+      // 2. Primary Conversion: HEX -> DEC (Standard Web Admin Format)
       try {
         BigInt decForward = BigInt.parse(hexForward, radix: 16);
-        candidates.add(decForward.toString());
+        candidates.add(decForward.toString()); // Added first to query Dec ID first
       } catch (_) {}
 
-      // 3. Reversed Hex (Little Endian)
+      candidates.add(hexForward);
+
+      // 3. Reversed Bytes Conversion (Little-Endian USB Readers)
       List<int> reversedBytes = bytes.reversed.toList();
       String hexReversed = reversedBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
-      candidates.add(hexReversed);
-
-      // 4. Reversed Decimal
       try {
         BigInt decReversed = BigInt.parse(hexReversed, radix: 16);
         candidates.add(decReversed.toString());
       } catch (_) {}
+      candidates.add(hexReversed);
 
-      // 5. Add "RFID-" prefix variations for legacy entries
+      // 4. Prefixed variants for legacy records
       List<String> currentList = List.from(candidates);
       for (var item in currentList) {
         candidates.add('RFID-$item');
       }
-    } else {
-      candidates.addAll(['RFID-1001', '1001']);
     }
 
     return candidates.toList();
@@ -193,21 +190,21 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    String hexId = variants.isNotEmpty ? variants.first : 'Unknown';
-    String decId = variants.length > 1 ? variants[1] : 'Unknown';
+    String decId = variants.isNotEmpty ? variants.first : 'Unknown';
+    String hexId = variants.length > 1 ? variants[1] : 'Unknown';
 
     if (mounted) {
       setState(() {
         _customer = null;
         _isLastScanValid = false;
-        _cardStatusMessage = 'Unregistered Card ($hexId)';
+        _cardStatusMessage = 'Unregistered Card ($decId)';
       });
     }
 
     _showCardPrompt(
       isValid: false,
       title: '❌ Unregistered Card',
-      message: 'This ID card is not in the system.\n\nDetected Tag Formats:\n• Hex ID: $hexId\n• Dec ID: $decId\n\nRegister either value in your Admin Web App.',
+      message: 'This ID card is not in the system database.\n\nConverted Read Values:\n• Dec ID: $decId\n• Hex ID: $hexId\n\nSave $decId in your Web Admin panel.',
     );
   }
 
@@ -306,7 +303,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: const Color(0xFFD70F64),
-        elevation: 0,
+        elevation: 2,
         foregroundColor: Colors.white,
         centerTitle: true,
         title: const Row(
