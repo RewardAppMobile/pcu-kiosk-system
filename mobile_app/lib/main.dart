@@ -90,7 +90,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// Converts raw NFC Hex bytes to Little-Endian Decimal ID in memory silently
+  /// Extracts Hex bytes and performs the direct Hex-to-Decimal conversion (5A7F4627 -> 1518290471)
   List<String> _generateRfidVariantsInBackground(NfcTag tag) {
     final Map<dynamic, dynamic> data = tag.data;
     List<int>? bytes;
@@ -121,24 +121,34 @@ class _HomeScreenState extends State<HomeScreen> {
     List<String> candidates = [];
 
     if (bytes != null && bytes.isNotEmpty) {
-      // Little-Endian byte reversal to match standard EM readers
+      // 1. Direct Hex String from Phone Reader (e.g. [0x5A, 0x7F, 0x46, 0x27] -> "5A7F4627")
+      String hexForward = bytes
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join('')
+          .toUpperCase();
+
+      // 2. EXACT PHOTO CONVERSION: Hex to Decimal (e.g. "5A7F4627" -> "1518290471")
+      try {
+        BigInt decForward = BigInt.parse(hexForward, radix: 16);
+        candidates.add(decForward.toString()); // Prioritize standard Decimal ID (1518290471)
+      } catch (_) {}
+
+      // Add Raw Hex string as 2nd candidate (5A7F4627)
+      candidates.add(hexForward);
+
+      // 3. Fallback Little-Endian Reversal (for specialized card readers)
       List<int> reversedBytes = bytes.reversed.toList();
-      String hexReversed = reversedBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
+      String hexReversed = reversedBytes
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join('')
+          .toUpperCase();
       try {
         BigInt decReversed = BigInt.parse(hexReversed, radix: 16);
         candidates.add(decReversed.toString());
       } catch (_) {}
       candidates.add(hexReversed);
 
-      // Forward bytes fallback
-      String hexForward = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
-      try {
-        BigInt decForward = BigInt.parse(hexForward, radix: 16);
-        candidates.add(decForward.toString());
-      } catch (_) {}
-      candidates.add(hexForward);
-
-      // Prefixed variants
+      // Prefixed variants fallback
       List<String> currentList = List.from(candidates);
       for (var item in currentList) {
         candidates.add('RFID-$item');
@@ -181,14 +191,14 @@ class _HomeScreenState extends State<HomeScreen> {
             setState(() {
               _customer = data;
               _isLastScanValid = true;
-              _cardStatusMessage = 'Card Valid: ${data['name']}';
+              _cardStatusMessage = 'Card Valid & Accepted: ${data['name']}';
               _selectedIndex = 0; // Automatically navigate to Dashboard
               _isProcessingCard = false;
             });
 
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Card Verified: Welcome ${data['name']}!'),
+                content: Text('CARD VALID AND ACCEPTED: Welcome ${data['name']}!'),
                 backgroundColor: Colors.green.shade800,
                 duration: const Duration(seconds: 3),
                 behavior: SnackBarBehavior.floating,
@@ -381,7 +391,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAlignment.start,
                   children: [
                     const Text('NFC Reader Active', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF003366))),
                     Text(_cardStatusMessage, style: const TextStyle(fontSize: 12, color: Colors.black87)),
@@ -419,7 +429,7 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAlignment.start,
               children: [
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -449,7 +459,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(width: 16),
                     Expanded(
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        crossAxisAlignment: CrossAlignment.start,
                         children: [
                           Text(_customer!['name'], style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 2),
@@ -471,7 +481,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        crossAxisAlignment: CrossAlignment.start,
                         children: [
                           Text('CURRENT REWARD BALANCE', style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
                           Text('Active points', style: TextStyle(color: Colors.white38, fontSize: 10)),
@@ -621,7 +631,7 @@ class _HomeScreenState extends State<HomeScreen> {
               subtitle: Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAlignment.start,
                   children: [
                     Row(
                       children: [
